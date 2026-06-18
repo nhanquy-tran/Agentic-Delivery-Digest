@@ -1,0 +1,6 @@
+{
+  "name": "AI News Aggregator and Summarizer",
+  "description": "Daily and weekly curated technology digests, news aggregator, and operational guides focusing on Agentic Delivery, SaaS management, and AI workforce adoption, integrated with Gemini AI and Gmail notifications.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
