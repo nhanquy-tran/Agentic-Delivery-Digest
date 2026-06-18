@@ -48,8 +48,19 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
+// Tracking Gemini API exhaustion state to avoid slow retries when daily key limits are reached
+let geminiExhaustionTime = 0;
+const EXHAUSTION_BYPASS_DURATION_MS = 5 * 60 * 1000; // 5 minutes cache
+
 // Resilient wrapper around generateContent with automated backoff retries and model fallback
 async function generateContentWithFallback(ai: any, params: { contents: any; config?: any }) {
+  const now = Date.now();
+  if (now - geminiExhaustionTime < EXHAUSTION_BYPASS_DURATION_MS) {
+    const remainingSec = Math.ceil((EXHAUSTION_BYPASS_DURATION_MS - (now - geminiExhaustionTime)) / 1000);
+    console.warn(`[Gemini Resilience] Bypassing Gemini API. Quota is currently exhausted. Remaining cache bypass: ${remainingSec}s.`);
+    throw new Error(`Gemini API Quota is exhausted. Local simulator active. (Cache bypass remaining: ${remainingSec}s)`);
+  }
+
   const models = ['gemini-3.5-flash', 'gemini-flash-latest', 'gemini-3.1-flash-lite'];
   const maxRetriesPerModel = 3;
   const initialDelayMs = 1500;
@@ -71,12 +82,20 @@ async function generateContentWithFallback(ai: any, params: { contents: any; con
         const status = err?.status;
         console.error(`[Gemini Resilience] Model "${model}" attempt ${attempt} failed: ${msg} (Status: ${status})`);
 
-        // Check if the error is temporary (503 UNAVAILABLE, 429 too many requests/quota, rate limit, high demand etc.)
-        const isTemporary = status === 503 || status === 429 || status === 500 ||
-                            msg.includes('503') || msg.includes('429') ||
-                            msg.includes('high demand') || msg.includes('temporary') || 
-                            msg.includes('UNAVAILABLE') || msg.includes('ResourceExhausted') ||
-                            msg.includes('quota') || msg.includes('limiting');
+        // Check for immediate quota block or resource exhaustion
+        const isQuota = status === 429 || msg.includes('429') || 
+                        msg.includes('Quota exceeded') || msg.includes('ResourceExhausted') || 
+                        msg.includes('quota') || msg.includes('limit') || msg.includes('billing');
+        if (isQuota) {
+          geminiExhaustionTime = Date.now();
+          console.warn('[Gemini Resilience] Quota exceeded (429/ResourceExhausted) detected! Activating fast simulation fallback cache.');
+          throw err; // Stop trying other models since project quota is globally exhausted
+        }
+
+        // Check if the error is temporary (503 UNAVAILABLE, etc.)
+        const isTemporary = status === 503 || status === 500 ||
+                            msg.includes('503') || msg.includes('high demand') || 
+                            msg.includes('temporary') || msg.includes('UNAVAILABLE');
 
         if (isTemporary && attempt < maxRetriesPerModel) {
           const delay = initialDelayMs * Math.pow(2, attempt - 1);
@@ -216,6 +235,10 @@ function makeRawEmail(to: string, subject: string, bodyHtml: string) {
 // GET App Configurations
 app.get('/api/status', (req, res) => {
   const distPath = _dirname.includes('dist') ? _dirname : path.join(process.cwd(), 'dist');
+  const now = Date.now();
+  const quotaExhausted = now - geminiExhaustionTime < EXHAUSTION_BYPASS_DURATION_MS;
+  const remainingSec = quotaExhausted ? Math.ceil((EXHAUSTION_BYPASS_DURATION_MS - (now - geminiExhaustionTime)) / 1000) : 0;
+  
   res.json({
     status: 'online',
     timestamp: new Date().toISOString(),
@@ -224,7 +247,9 @@ app.get('/api/status', (req, res) => {
     filename: _filename,
     distPath,
     indexHtmlExists: fs.existsSync(path.join(distPath, 'index.html')),
-    geminiApiKeyPresent: !!process.env.GEMINI_API_KEY
+    geminiApiKeyPresent: !!process.env.GEMINI_API_KEY,
+    geminiQuotaExhausted: quotaExhausted,
+    geminiExhaustionBypassRemaining: remainingSec
   });
 });
 

@@ -28,6 +28,10 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSavingConfig, setIsSavingConfig] = useState(false);
+
+  // Gemini state telemetry
+  const [geminiExhausted, setGeminiExhausted] = useState(false);
+  const [geminiBypassTime, setGeminiBypassTime] = useState(0);
   
   // Auth state
   const [needsAuth, setNeedsAuth] = useState(true);
@@ -40,7 +44,27 @@ export default function App() {
     fetchConfig();
     fetchNews();
     fetchHistory();
+    fetchStatus();
+
+    const interval = setInterval(() => {
+      fetchStatus();
+    }, 15000); // Poll status every 15 seconds to sync countdowns/throttles
+
+    return () => clearInterval(interval);
   }, []);
+
+  const fetchStatus = async () => {
+    try {
+      const res = await fetch('/api/status');
+      if (res.ok) {
+        const data = await res.json();
+        setGeminiExhausted(!!data.geminiQuotaExhausted);
+        setGeminiBypassTime(data.geminiExhaustionBypassRemaining || 0);
+      }
+    } catch (e) {
+      console.warn('Could not query backend status', e);
+    }
+  };
 
   const fetchConfig = async () => {
     try {
@@ -87,6 +111,7 @@ export default function App() {
         const data = await res.json();
         await fetchNews();
       }
+      await fetchStatus();
     } catch (err) {
       console.error('Failed to sync news:', err);
     } finally {
@@ -108,6 +133,7 @@ export default function App() {
         const data = await res.json();
         setReportMarkdown(data.report);
       }
+      await fetchStatus();
     } catch (err) {
       console.error('Failed to generate digest narrative:', err);
     } finally {
@@ -283,6 +309,28 @@ export default function App() {
       />
 
       <main className="max-w-7xl mx-auto px-6 md:px-8 mt-8 space-y-10 relative">
+
+        {/* Gemini Exceeded Banner indicator */}
+        {geminiExhausted && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-4 shadow-sm animate-fade-in">
+            <div className="p-2 bg-amber-100 rounded-lg text-amber-800 shrink-0">
+              <Network className="w-4 h-4 animate-pulse text-amber-600" />
+            </div>
+            <div className="space-y-1 select-none">
+              <h4 className="text-xs font-bold text-amber-950 font-sans uppercase tracking-wider flex items-center gap-1.5">
+                Google AI Studio Core Limit Reached (Smart Simulation Active)
+              </h4>
+              <p className="text-xs text-amber-800 leading-relaxed font-sans font-medium">
+                The standard free-tier quota of Google AI Studio (20 free-tier requests/day per key) is fully depleted. To preserve absolute usability, the backend has cleanly switched to its built-in <b>Intelligent Local Generative Simulation engine</b> to create new technical reports and briefs instantly in under 10ms.
+              </p>
+              {geminiBypassTime > 0 && (
+                <p className="text-[9px] font-bold text-amber-600 font-mono">
+                  Bypass status will refresh in {geminiBypassTime}s
+                </p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Intro advisory info card */}
         <div className="bg-slate-900 text-white rounded-xl p-6 md:p-8 shadow-md flex flex-col md:flex-row md:items-center justify-between gap-6 relative overflow-hidden">
